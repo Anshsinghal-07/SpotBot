@@ -27,12 +27,13 @@ app.message(/spot|spotted/i, async ({ message, say }) => {
 
   if (targetUser && hasImage) {
     try {
-      // Create the spot record
+      // Create the spot record, storing the original message ts so we can link replies
       const newSpot = new Spot({
         spotterId: message.user,
         targetId: targetUser,
         imageUrl: message.files[0].url_private, //Requires bot to have 'files:read'
         channelId: message.channel,
+        messageTs: message.ts,
       });
 
       await newSpot.save();
@@ -209,6 +210,55 @@ app.message(/pics/i, async ({ message, say }) => {
   } catch (error) {
     console.error(error);
     await say("⚠️ I couldn't dig up those photos right now.");
+  }
+});
+
+
+// The "Veto" Listener (Admin replies "veto" to a spot message to delete it)
+app.message(/^veto$/i, async ({ message, say, client }) => {
+  // 1. Only works as a threaded reply to a spot message
+  if (!message.thread_ts || message.thread_ts === message.ts) return;
+
+  try {
+    // 2. Admin check
+    const userResult = await client.users.info({ user: message.user });
+    const isAdmin = userResult.user.is_admin;
+
+    if (!isAdmin) {
+      return await say({
+        text: `🚫 *Access Denied.* <@${message.user}>, only Workspace Admins can veto spots.`,
+        thread_ts: message.thread_ts
+      });
+    }
+
+    // 3. Find the spot linked to the original message this reply is on
+    const deletedSpot = await Spot.findOneAndDelete({
+      messageTs: message.thread_ts,
+      channelId: message.channel
+    });
+
+    if (deletedSpot) {
+      const dateString = new Date(deletedSpot.timestamp).toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+      });
+      await say({
+        text: `🔨 *Vetoed!* Admin <@${message.user}> removed this spot ` +
+              `(<@${deletedSpot.spotterId}> spotted <@${deletedSpot.targetId}> on ${dateString}).`,
+        thread_ts: message.thread_ts
+      });
+    } else {
+      await say({
+        text: `🤷 No spot found for this message. It may have already been vetoed.`,
+        thread_ts: message.thread_ts
+      });
+    }
+
+  } catch (error) {
+    console.error(error);
+    await say({
+      text: "⚠️ I had trouble processing the veto.",
+      thread_ts: message.thread_ts
+    });
   }
 });
 

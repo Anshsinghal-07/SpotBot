@@ -5,6 +5,7 @@ const SpotSchema = new mongoose.Schema({
   targetId: { type: String, required: true },  // Slack User ID
   imageUrl: { type: String, required: true },  // URL of the image
   channelId: { type: String, required: true }, // To keep spots channel-specific
+  messageTs: { type: String },               // Slack message timestamp (links reply → spot)
   status: { 
     type: String, 
     enum: ['confirmed', 'pending', 'rejected'], 
