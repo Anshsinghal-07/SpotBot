@@ -17,8 +17,8 @@ mongoose.connect(process.env.MONGODB_URI)
   .catch(err => console.error('MongoDB connection error:', err));
 
 
-// The "Spot" Listener
-app.message(/spot|spotted/i, async ({ message, say }) => {
+// The "Spot" Listener — triggers on "spot/spotted" OR any message with a @mention
+app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
   if (message.channel !== 'C0AD6UA1G92') return;
 
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
@@ -284,7 +284,7 @@ app.command('/reset', async ({ command, ack, say, client }) => {
     const result = await Spot.deleteMany({ channelId: command.channel_id });
 
     if (result.deletedCount > 0) {
-      await say(`qm *Kaboom!* Admin <@${command.user_id}> has wiped the board. ${result.deletedCount} spots deleted.`);
+      await say(`*Kaboom!* Admin <@${command.user_id}> has wiped the board. ${result.deletedCount} spots deleted.`);
     } else {
       await say("🧹 The board is already clean.");
     }
