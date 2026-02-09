@@ -1,37 +1,86 @@
 require('dotenv').config();
-const { App } = require('@slack/bolt');
-
-const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  socketMode: true,
-  appToken: process.env.SLACK_APP_TOKEN,
-});
-
+const { App, LogLevel } = require('@slack/bolt');
 const mongoose = require('mongoose');
-const Spot = require('./Spot'); // Import the schema
+const Spot = require('./Spot');
+const Installation = require('./Installation');
 
-// Connect to MongoDB
+// ─── MongoDB Connection ───────────────────────────────────────────────────────
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('🍃 Connected to MongoDB'))
+  .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
+// ─── Installation Store (Multi-Workspace Token Storage) ───────────────────────
+const installationStore = {
+  storeInstallation: async (installation) => {
+    const teamId = installation.team.id;
+    await Installation.findOneAndUpdate(
+      { teamId },
+      {
+        teamId,
+        teamName: installation.team.name,
+        botToken: installation.bot.token,
+        botId: installation.bot.id,
+        botUserId: installation.bot.userId,
+        installation,
+      },
+      { upsert: true, new: true }
+    );
+    console.log(`Installation stored for team ${teamId}`);
+  },
 
-// The "Spot" Listener — triggers on "spot/spotted" OR any message with a @mention
+  fetchInstallation: async (installQuery) => {
+    const teamId = installQuery.teamId;
+    const record = await Installation.findOne({ teamId });
+    if (!record) {
+      throw new Error(`No installation found for team ${teamId}`);
+    }
+    return record.installation;
+  },
+
+  deleteInstallation: async (installQuery) => {
+    const teamId = installQuery.teamId;
+    await Installation.deleteOne({ teamId });
+    console.log(`Installation deleted for team ${teamId}`);
+  },
+};
+
+// ─── Initialize Bolt App (HTTP mode + OAuth) ─────────────────────────────────
+const app = new App({
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  clientId: process.env.SLACK_CLIENT_ID,
+  clientSecret: process.env.SLACK_CLIENT_SECRET,
+  stateSecret: process.env.SLACK_STATE_SECRET,
+  scopes: [
+    'chat:write',
+    'channels:history',
+    'files:read',
+    'commands',
+    'users:read',
+    'reactions:write',
+    'reactions:read',
+  ],
+  installationStore,
+  installerOptions: {
+    directInstall: true, // Clicking /slack/install goes straight to Slack OAuth
+  },
+  logLevel: process.env.SLACK_DEBUG === '1' ? LogLevel.DEBUG : LogLevel.INFO,
+});
+
+
+// ─── The "Spot" Listener ─────────────────────────────────────────────────────
+// Triggers on "spot/spotted" OR any message with a @mention
 app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
-  if (message.channel !== 'C0AD6UA1G92') return;
-
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
   const hasImage = message.files && message.files.length > 0;
 
   if (targetUser && hasImage) {
     try {
-      // Create the spot record, storing the original message ts so we can link replies
       const newSpot = new Spot({
+        teamId: message.team,
         spotterId: message.user,
         targetId: targetUser,
-        imageUrl: message.files[0].url_private, //Requires bot to have 'files:read'
+        imageUrl: message.files[0].url_private,
         channelId: message.channel,
         messageTs: message.ts,
       });
@@ -47,49 +96,28 @@ app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
   }
 });
 
-(async () => {
-  await app.start();
-  console.log('⚡️ Spot Bot is running in Socket Mode!');
-})();
 
-
-// The "Spotboard" Command
+// ─── The "Spotboard" Command ─────────────────────────────────────────────────
 app.command('/spotboard', async ({ command, ack, say }) => {
-  // 1. Acknowledge the command immediately so Slack doesn't timeout
   await ack();
 
-  // 2. Determine how many people to show (Default to 10, max 25)
   let limit = parseInt(command.text) || 10;
-  if (limit > 25) limit = 25; // Cap it to prevent spamming the channel
+  if (limit > 25) limit = 25;
 
   try {
-    // 3. The MongoDB Aggregation Pipeline
     const leaderboard = await Spot.aggregate([
-      // Stage A: Filter for this channel only and valid spots
-      { $match: { channelId: command.channel_id, status: 'confirmed' } },
-      
-      // Stage B: Group by the 'spotterId' and count them
+      { $match: { teamId: command.team_id, channelId: command.channel_id, status: 'confirmed' } },
       { $group: { _id: '$spotterId', count: { $sum: 1 } } },
-      
-      // Stage C: Sort by count (Highest to Lowest)
       { $sort: { count: -1 } },
-      
-      // Stage D: Take only the top N results
       { $limit: limit }
     ]);
 
     if (leaderboard.length === 0) {
-      return await say("zb No spots yet! Go touch grass and find someone!");
+      return await say("No spots yet! Go touch grass and find someone!");
     }
 
-    // 4. Format the output text
     let messageText = `🏆 *Top ${limit} Spotters*\n`;
-    
-    // Loop through results and build the list
-    // formatting: "1. @User: 5 spots"
     leaderboard.forEach((entry, index) => {
-      // entry._id is the Slack User ID (e.g., U12345)
-      // entry.count is the number of spots
       const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '•';
       messageText += `${medal} <@${entry._id}>: *${entry.count}* spots\n`;
     });
@@ -103,7 +131,7 @@ app.command('/spotboard', async ({ command, ack, say }) => {
 });
 
 
-// The "Caughtboard" Command (Who is the biggest target?)
+// ─── The "Caughtboard" Command ───────────────────────────────────────────────
 app.command('/caughtboard', async ({ command, ack, say }) => {
   await ack();
 
@@ -112,24 +140,17 @@ app.command('/caughtboard', async ({ command, ack, say }) => {
 
   try {
     const leaderboard = await Spot.aggregate([
-      // Stage A: Filter for this channel & valid spots
-      { $match: { channelId: command.channel_id, status: 'confirmed' } },
-      
-      // Stage B: Group by 'targetId' (The VICTIM) instead of spotterId
+      { $match: { teamId: command.team_id, channelId: command.channel_id, status: 'confirmed' } },
       { $group: { _id: '$targetId', count: { $sum: 1 } } },
-      
-      // Stage C: Sort descending (Most caught at the top)
       { $sort: { count: -1 } },
-      
       { $limit: limit }
     ]);
 
     if (leaderboard.length === 0) {
-      return await say("zbHs Everyone is a ninja here. No one has been caught yet!");
+      return await say("Everyone is a ninja here. No one has been caught yet!");
     }
 
     let messageText = `🎯 *Top ${limit} Most Wanted (Caught)*\n`;
-    
     leaderboard.forEach((entry, index) => {
       const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '•';
       messageText += `${medal} <@${entry._id}>: *${entry.count}* times\n`;
@@ -143,11 +164,9 @@ app.command('/caughtboard', async ({ command, ack, say }) => {
   }
 });
 
-// The "Pics" Listener (Show a gallery of the last 10 spots)
-app.message(/pics/i, async ({ message, say }) => {
-  // 1. Check Channel & Parse Mention
-  if (message.channel !== 'C0AD6UA1G92') return; // Replace with your Channel ID
 
+// ─── The "Pics" Listener ─────────────────────────────────────────────────────
+app.message(/pics/i, async ({ message, say }) => {
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
 
@@ -156,22 +175,19 @@ app.message(/pics/i, async ({ message, say }) => {
   }
 
   try {
-    // 2. Find spots where this person was the TARGET
-    // We limit to 10 to avoid spamming the channel with a huge wall of text
-    const spots = await Spot.find({ 
-      targetId: targetUser, 
-      channelId: message.channel, 
-      status: 'confirmed' 
+    const spots = await Spot.find({
+      teamId: message.team,
+      targetId: targetUser,
+      channelId: message.channel,
+      status: 'confirmed'
     })
-    .sort({ timestamp: -1 }) // Newest first
+    .sort({ timestamp: -1 })
     .limit(10);
 
     if (spots.length === 0) {
       return await say(`🤷 <@${targetUser}> is clean! No photos found.`);
     }
 
-    // 3. Build the Message Blocks
-    // We use "Section" blocks with Markdown links
     const responseBlocks = [
       {
         type: "section",
@@ -180,14 +196,10 @@ app.message(/pics/i, async ({ message, say }) => {
           text: `📸 *Last ${spots.length} times <@${targetUser}> was spotted:*`
         }
       },
-      {
-        type: "divider"
-      }
+      { type: "divider" }
     ];
 
-    // Loop through spots and add a link for each
     spots.forEach((spot) => {
-      // Format the date nicely (e.g., "Feb 4th")
       const dateString = new Date(spot.timestamp).toLocaleDateString('en-US', {
         month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
       });
@@ -201,10 +213,9 @@ app.message(/pics/i, async ({ message, say }) => {
       });
     });
 
-    // 4. Send the blocks
     await say({
       blocks: responseBlocks,
-      text: `Gallery for <@${targetUser}>` // Fallback for notifications
+      text: `Gallery for <@${targetUser}>`
     });
 
   } catch (error) {
@@ -214,13 +225,11 @@ app.message(/pics/i, async ({ message, say }) => {
 });
 
 
-// The "Veto" Listener (Admin replies "veto" to a spot message to delete it)
+// ─── The "Veto" Listener (Admin replies "veto" to a spot message) ────────────
 app.message(/^veto$/i, async ({ message, say, client }) => {
-  // 1. Only works as a threaded reply to a spot message
   if (!message.thread_ts || message.thread_ts === message.ts) return;
 
   try {
-    // 2. Admin check
     const userResult = await client.users.info({ user: message.user });
     const isAdmin = userResult.user.is_admin;
 
@@ -231,8 +240,8 @@ app.message(/^veto$/i, async ({ message, say, client }) => {
       });
     }
 
-    // 3. Find the spot linked to the original message this reply is on
     const deletedSpot = await Spot.findOneAndDelete({
+      teamId: message.team,
       messageTs: message.thread_ts,
       channelId: message.channel
     });
@@ -263,25 +272,19 @@ app.message(/^veto$/i, async ({ message, say, client }) => {
 });
 
 
-// The "Reset" Command (Dynamic Admin Check)
+// ─── The "Reset" Command (Admin Only) ────────────────────────────────────────
 app.command('/reset', async ({ command, ack, say, client }) => {
   await ack();
 
   try {
-    // 1. Ask Slack for info about the user who ran the command
-    const userResult = await client.users.info({
-      user: command.user_id
-    });
-
-    // 2. Check the "is_admin" flag (This works for Owners too)
+    const userResult = await client.users.info({ user: command.user_id });
     const isAdmin = userResult.user.is_admin;
 
     if (!isAdmin) {
       return await say(`🚫 *Access Denied.* <@${command.user_id}>, you are not a Workspace Admin.`);
     }
 
-    // 3. If they ARE an admin, proceed with the wipe
-    const result = await Spot.deleteMany({ channelId: command.channel_id });
+    const result = await Spot.deleteMany({ teamId: command.team_id, channelId: command.channel_id });
 
     if (result.deletedCount > 0) {
       await say(`*Kaboom!* Admin <@${command.user_id}> has wiped the board. ${result.deletedCount} spots deleted.`);
@@ -294,3 +297,12 @@ app.command('/reset', async ({ command, ack, say, client }) => {
     await say("⚠️ I couldn't verify your admin status with Slack.");
   }
 });
+
+
+// ─── Start the App ───────────────────────────────────────────────────────────
+(async () => {
+  const port = process.env.PORT || 3000;
+  await app.start(port);
+  console.log(`SpotBot is running on port ${port}!`);
+  console.log(`Install URL: https://your-render-url.onrender.com/slack/install`);
+})();
