@@ -304,5 +304,5 @@ app.command('/reset', async ({ command, ack, say, client }) => {
   const port = process.env.PORT || 3000;
   await app.start(port);
   console.log(`SpotBot is running on port ${port}!`);
-  console.log(`Install URL: https://your-render-url.onrender.com/slack/install`);
+  console.log(`Install URL: https://spotbot-4ilo.onrender.com/slack/install`);
 })();
