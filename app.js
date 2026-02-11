@@ -4,6 +4,12 @@ const mongoose = require('mongoose');
 const Spot = require('./Spot');
 const Installation = require('./Installation');
 
+// ─── Startup Env Check ────────────────────────────────────────────────────────
+const requiredVars = ['SLACK_CLIENT_ID', 'SLACK_CLIENT_SECRET', 'SLACK_SIGNING_SECRET', 'SLACK_STATE_SECRET', 'MONGODB_URI'];
+requiredVars.forEach(v => {
+  console.log(`  ${v}: ${process.env[v] ? 'SET' : '*** MISSING ***'}`);
+});
+
 // ─── MongoDB Connection ───────────────────────────────────────────────────────
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
