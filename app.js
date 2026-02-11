@@ -67,9 +67,55 @@ const app = new App({
 });
 
 
+// ─── Channel Guard Helper ─────────────────────────────────────────────────────
+// Returns the active channel for a team, or null if not set
+async function getActiveChannel(teamId) {
+  const record = await Installation.findOne({ teamId });
+  return record?.activeChannelId || null;
+}
+
+// Checks if a message/command is in the active channel. Returns true if allowed.
+async function isActiveChannel(teamId, channelId) {
+  const active = await getActiveChannel(teamId);
+  if (!active) return false; // No channel set yet
+  return active === channelId;
+}
+
+
+// ─── The "Set Channel" Command (Admin Only) ──────────────────────────────────
+// An admin runs /setchannel in the channel they want SpotBot to operate in
+app.command('/setchannel', async ({ command, ack, say, client }) => {
+  await ack();
+
+  try {
+    // Admin check
+    const userResult = await client.users.info({ user: command.user_id });
+    const isAdmin = userResult.user.is_admin;
+
+    if (!isAdmin) {
+      return await say(`🚫 *Access Denied.* <@${command.user_id}>, only Workspace Admins can set the SpotBot channel.`);
+    }
+
+    // Save this channel as the active channel for this workspace
+    await Installation.findOneAndUpdate(
+      { teamId: command.team_id },
+      { activeChannelId: command.channel_id }
+    );
+
+    await say(`✅ *SpotBot is now active in this channel!* All spotting will happen here.`);
+
+  } catch (error) {
+    console.error(error);
+    await say("⚠️ I had trouble setting the channel.");
+  }
+});
+
+
 // ─── The "Spot" Listener ─────────────────────────────────────────────────────
 // Triggers on "spot/spotted" OR any message with a @mention
 app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
+  // Only operate in the configured channel
+  if (!await isActiveChannel(message.team, message.channel)) return;
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
   const hasImage = message.files && message.files.length > 0;
@@ -100,6 +146,10 @@ app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
 // ─── The "Spotboard" Command ─────────────────────────────────────────────────
 app.command('/spotboard', async ({ command, ack, say }) => {
   await ack();
+
+  if (!await isActiveChannel(command.team_id, command.channel_id)) {
+    return await say("⚠️ SpotBot isn't active in this channel. An admin can run `/setchannel` to activate it.");
+  }
 
   let limit = parseInt(command.text) || 10;
   if (limit > 25) limit = 25;
@@ -135,6 +185,10 @@ app.command('/spotboard', async ({ command, ack, say }) => {
 app.command('/caughtboard', async ({ command, ack, say }) => {
   await ack();
 
+  if (!await isActiveChannel(command.team_id, command.channel_id)) {
+    return await say("⚠️ SpotBot isn't active in this channel. An admin can run `/setchannel` to activate it.");
+  }
+
   let limit = parseInt(command.text) || 10;
   if (limit > 25) limit = 25;
 
@@ -167,6 +221,8 @@ app.command('/caughtboard', async ({ command, ack, say }) => {
 
 // ─── The "Pics" Listener ─────────────────────────────────────────────────────
 app.message(/pics/i, async ({ message, say }) => {
+  if (!await isActiveChannel(message.team, message.channel)) return;
+
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
 
@@ -227,6 +283,7 @@ app.message(/pics/i, async ({ message, say }) => {
 
 // ─── The "Veto" Listener (Admin replies "veto" to a spot message) ────────────
 app.message(/^veto$/i, async ({ message, say, client }) => {
+  if (!await isActiveChannel(message.team, message.channel)) return;
   if (!message.thread_ts || message.thread_ts === message.ts) return;
 
   try {
@@ -275,6 +332,10 @@ app.message(/^veto$/i, async ({ message, say, client }) => {
 // ─── The "Reset" Command (Admin Only) ────────────────────────────────────────
 app.command('/reset', async ({ command, ack, say, client }) => {
   await ack();
+
+  if (!await isActiveChannel(command.team_id, command.channel_id)) {
+    return await say("⚠️ SpotBot isn't active in this channel. An admin can run `/setchannel` to activate it.");
+  }
 
   try {
     const userResult = await client.users.info({ user: command.user_id });

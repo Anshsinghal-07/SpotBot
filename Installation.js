@@ -7,7 +7,8 @@ const InstallationSchema = new mongoose.Schema({
   botToken: { type: String, required: true },
   botId: { type: String },
   botUserId: { type: String },
-  installation: { type: Object, required: true }, // Full Slack installation object
+  activeChannelId: { type: String, default: null }, // The one channel the bot operates in
+  installation: { type: Object, required: true },   // Full Slack installation object
   installedAt: { type: Date, default: Date.now }
 });
 
