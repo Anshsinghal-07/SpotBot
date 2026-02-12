@@ -119,23 +119,20 @@ app.command('/setchannel', async ({ command, ack, say, client }) => {
 
 // ─── The "Spot" Listener ─────────────────────────────────────────────────────
 // Triggers on "spot/spotted" OR any message with a @mention
-app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
-  console.log('[SPOT] Message received:', { team: message.team, channel: message.channel, text: message.text, hasFiles: !!(message.files && message.files.length) });
+app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, body, say }) => {
+  const teamId = body.team_id;
 
   // Only operate in the configured channel
-  const channelOk = await isActiveChannel(message.team, message.channel);
-  console.log('[SPOT] Active channel check:', channelOk);
-  if (!channelOk) return;
+  if (!await isActiveChannel(teamId, message.channel)) return;
 
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
   const hasImage = message.files && message.files.length > 0;
-  console.log('[SPOT] Parsed:', { targetUser, hasImage });
 
   if (targetUser && hasImage) {
     try {
       const newSpot = new Spot({
-        teamId: message.team,
+        teamId,
         spotterId: message.user,
         targetId: targetUser,
         imageUrl: message.files[0].url_private,
@@ -232,10 +229,12 @@ app.command('/caughtboard', async ({ command, ack, say }) => {
 
 
 // ─── The "Pics" Listener ─────────────────────────────────────────────────────
-app.message(/pics/i, async ({ message, say }) => {
-  if (!await isActiveChannel(message.team, message.channel)) return;
+app.message(/pics/i, async ({ message, body, say }) => {
+  const teamId = body.team_id;
+  if (!await isActiveChannel(teamId, message.channel)) return;
 
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
+
   const targetUser = mentionMatch ? mentionMatch[1] : null;
 
   if (!targetUser) {
@@ -244,7 +243,7 @@ app.message(/pics/i, async ({ message, say }) => {
 
   try {
     const spots = await Spot.find({
-      teamId: message.team,
+      teamId,
       targetId: targetUser,
       channelId: message.channel,
       status: 'confirmed'
@@ -294,8 +293,9 @@ app.message(/pics/i, async ({ message, say }) => {
 
 
 // ─── The "Veto" Listener (Admin replies "veto" to a spot message) ────────────
-app.message(/^veto$/i, async ({ message, say, client }) => {
-  if (!await isActiveChannel(message.team, message.channel)) return;
+app.message(/^veto$/i, async ({ message, body, say, client }) => {
+  const teamId = body.team_id;
+  if (!await isActiveChannel(teamId, message.channel)) return;
   if (!message.thread_ts || message.thread_ts === message.ts) return;
 
   try {
@@ -310,7 +310,7 @@ app.message(/^veto$/i, async ({ message, say, client }) => {
     }
 
     const deletedSpot = await Spot.findOneAndDelete({
-      teamId: message.team,
+      teamId,
       messageTs: message.thread_ts,
       channelId: message.channel
     });
