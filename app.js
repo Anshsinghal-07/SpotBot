@@ -120,11 +120,17 @@ app.command('/setchannel', async ({ command, ack, say, client }) => {
 // ─── The "Spot" Listener ─────────────────────────────────────────────────────
 // Triggers on "spot/spotted" OR any message with a @mention
 app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, say }) => {
+  console.log('[SPOT] Message received:', { team: message.team, channel: message.channel, text: message.text, hasFiles: !!(message.files && message.files.length) });
+
   // Only operate in the configured channel
-  if (!await isActiveChannel(message.team, message.channel)) return;
+  const channelOk = await isActiveChannel(message.team, message.channel);
+  console.log('[SPOT] Active channel check:', channelOk);
+  if (!channelOk) return;
+
   const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
   const targetUser = mentionMatch ? mentionMatch[1] : null;
   const hasImage = message.files && message.files.length > 0;
+  console.log('[SPOT] Parsed:', { targetUser, hasImage });
 
   if (targetUser && hasImage) {
     try {
