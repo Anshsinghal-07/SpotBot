@@ -125,28 +125,31 @@ app.message(/spot|spotted|<@[A-Z0-9]+>/i, async ({ message, body, say }) => {
   // Only operate in the configured channel
   if (!await isActiveChannel(teamId, message.channel)) return;
 
-  const mentionMatch = message.text.match(/<@([A-Z0-9]+)>/);
-  const targetUser = mentionMatch ? mentionMatch[1] : null;
+  // Find ALL @mentions in the message (supports multiple spots in one message)
+  const mentions = [...message.text.matchAll(/<@([A-Z0-9]+)>/g)].map(m => m[1]);
   const hasImage = message.files && message.files.length > 0;
 
-  if (targetUser && hasImage) {
+  if (mentions.length > 0 && hasImage) {
     try {
-      const newSpot = new Spot({
+      // Create a spot record for each mentioned user
+      const spots = mentions.map(targetUser => new Spot({
         teamId,
         spotterId: message.user,
         targetId: targetUser,
         imageUrl: message.files[0].url_private,
         channelId: message.channel,
         messageTs: message.ts,
-      });
+      }));
 
-      await newSpot.save();
-      await say(`✅ *Spot Logged!* <@${message.user}> has captured <@${targetUser}> in the wild.`);
+      await Spot.insertMany(spots);
+
+      const names = mentions.map(id => `<@${id}>`).join(', ');
+      await say(`✅ *Spot Logged!* <@${message.user}> has captured ${names} in the wild.`);
     } catch (error) {
       console.error(error);
       await say("⚠️ I had trouble saving that spot to the database.");
     }
-  } else if (!hasImage && targetUser) {
+  } else if (!hasImage && mentions.length > 0) {
     await say(`📸 No photo, no glory, <@${message.user}>!`);
   }
 });
